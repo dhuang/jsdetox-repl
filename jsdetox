@@ -1,40 +1,171 @@
-#!/usr/bin/env ruby
+#!/usr/bin/ruby
 
-require 'optparse'
+require 'rubygems'
+require 'colorize'
+require 'rkelly'
+require 'v8'
 
-options = { 'host' => '127.0.0.1' }
+require 'lib/taka/lib/taka.rb'
+require 'lib/jsengine.rb'
+require 'lib/jsengine_v8.rb'
 
-opts = OptionParser.new do |opts|
-	opts.banner = "Usage: #{$0} [options]"
+$marker = "m8}$rQd^UlTdfq^9lj6-NEX$adyjcG!4"
 
-	opts.separator "Options:"
+class JSDetox
+   def self.deobf(code)
+      first = execute(code)
+      return first.nil? ? code : deobf(first)
+   end
 
-	opts.on("-p", "-p <port>", "Use the specified TCP port") do |p|
-		options['port'] = p
-	end
+   def self.execute(code)
+      engine = JSEngines::V8Engine::Instance.new
+      begin
+         result = engine.execute(code)[:log][0][:data][:raw]
+         return (result.is_a? String) ? result: nil
+      rescue
+         return nil
+      end
+   end
 
-	opts.on("-l", "-l <addr>", "Listen on the specified IP address") do |l|
-		options['host'] = l
-	end
+   def self.extract(source)
+      doc = Taka::DOM::HTML(source)
+      scripts = doc.getElementsByTagName('script').map(&:innerHTML)
+      return scripts
+   end
 
-	opts.on_tail("-h", "--help", "Show this message") do
-		puts opts
-		exit
-	end
+   def self.reformat(code)
+      begin
+         parser = RKelly::Parser.new
+         ast = parser.parse(code)
+         return ast.to_ecma
+      rescue Exception
+         return code
+      end
+   end
 end
 
-begin
-	opts.parse!(ARGV)
-rescue OptionParser::InvalidOption
-	puts "Invalid option, try -h for usage"
-	exit
+def parse_param(param)
+   # file
+   if param =~ /\.html$|\.js$/
+      begin
+         return File.open(param, "r").read
+      rescue
+         puts "Failed to open file".light_red
+         return nil
+      end
+   end
+   # string
+   return param
 end
 
-print "[JSDetox] Loading framework ... "
-require File.expand_path("../config/boot.rb", __FILE__)
-puts "done."
+if __FILE__ == $0
+   while 1
+      # read in command
+      print "JSDetox> ".light_cyan
+      begin
+         input = gets.sub!(/\n$/,'')
+      rescue Interrupt
+         print "\n"
+         exit
+      end
+      cmd = input.sub(/\s.*$/, '')
+      param = input.sub(/^[A-z]*/, '').strip
 
-puts "[JSDetox] Starting webserver (hit Ctrl-C to quit) ..."
-s = Padrino::Server
-s.start(Padrino.application, options )
+      # HELP
+      if cmd.casecmp("HELP") == 0
+         puts "HELP               : ".light_magenta +
+              "this list of commands".light_yellow
+         puts "DEOBF <script>     : ".light_magenta +
+              "deobfuscate script (recursively execute)".light_yellow
+         puts "EXECUTE <script>   : ".light_magenta +
+              "execute script with v8".light_yellow
+         puts "REFORMAT <script>  : ".light_magenta +
+              "beautify syntax".light_yellow
+         puts "PRINT <html>       : ".light_magenta +
+              "prints content".light_yellow
+         puts "EXTRACT <html>     : ".light_magenta +
+              "extracts scripts out of script tags".light_yellow
+         puts "DETOX <html>       : ".light_magenta +
+              "returns updated source with scripts deobfuscated".light_yellow
+         puts "QUIT               : ".light_magenta +
+              "quit program".light_yellow
+         puts "Input parameters can be a string or file".light_blue
+      # DEOBF <script>
+      elsif cmd.casecmp("DEOBF") == 0 and not param.empty?
+         param = parse_param(param)
+         if param.nil?
+             next
+         end
+         puts JSDetox.deobf(param).light_green
+      # EXECUTE <script>
+      elsif cmd.casecmp("EXECUTE") == 0 and not param.empty?
+         param = parse_param(param)
+         if param.nil?
+             next
+         end
+         result = JSDetox.execute(param)
+         unless result.nil?
+            puts result.light_green
+         else
+            puts "Failed to execute".light_red
+         end
+      # REFORMAT <script>
+      elsif cmd.casecmp("REFORMAT") == 0 and not param.empty?
+         param = parse_param(param)
+         if param.nil?
+             next
+         end
+         puts JSDetox.reformat(param).light_green
+      # PRINT <html>
+      elsif cmd.casecmp("PRINT") == 0 and not param.empty?
+         param = parse_param(param)
+         if param.nil?
+             next
+         end
+         puts param.light_green
+      # EXTRACT <html>
+      elsif cmd.casecmp("EXTRACT") == 0 and not param.empty?
+         param = parse_param(param)
+         if param.nil?
+             next
+         end
+         scripts = JSDetox.extract(param)
+         if scripts.empty?
+            puts "Did not extract any scripts".light_red
+         else
+            for script in scripts
+               print ">> ".light_yellow
+               puts script.light_green
+            end
+         end
+      # DETOX <html>
+      elsif cmd.casecmp("DETOX") == 0 and not param.empty?
+         param = parse_param(param)
+         if param.nil?
+             next
+         end
+         deobf = []
+         for script in JSDetox.extract(param)
+            deobf.push(JSDetox.reformat(JSDetox.deobf(script)))
+            param.sub!(script, $marker)
+         end
 
+         for p, idx in param.split($marker).each_with_index
+            print p.light_green
+            if idx != deobf.length
+               print deobf[idx].light_yellow
+            end
+         end
+         print "\n"
+      # QUIT
+      elsif cmd.casecmp("QUIT") == 0
+         puts "Bye!".light_yellow
+         exit
+      # invalid commands
+      elsif cmd == ""
+         next
+      else
+         puts "Invalid input, try \"Help\"?".light_red
+      end
+   end
+end
